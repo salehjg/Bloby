@@ -5,6 +5,7 @@ import android.os.Looper;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -12,7 +13,7 @@ import java.net.Socket;
 public class ByteServer {
 
     public interface OnDataReceivedListener {
-        void onJsonDataReceived(String blobName, String datetime, String fullJson);
+        void onBlobReceived(String blobName, String datetime, String fullJson, byte[] fileData);
         void onServerStatus(String status);
     }
 
@@ -40,10 +41,7 @@ public class ByteServer {
                     try {
                         Socket clientSocket = serverSocket.accept();
                         notifyStatus("Client connected: " + clientSocket.getInetAddress());
-
-                        // Handle each client in a separate thread
                         handleClient(clientSocket);
-
                     } catch (Exception e) {
                         if (isRunning) {
                             notifyStatus("Error accepting connection: " + e.getMessage());
@@ -62,35 +60,37 @@ public class ByteServer {
 
     private void handleClient(Socket clientSocket) {
         new Thread(() -> {
-            try (InputStream inputStream = clientSocket.getInputStream()) {
-                ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            try (DataInputStream dis = new DataInputStream(clientSocket.getInputStream())) {
 
-                byte[] temp = new byte[4096];
-                int bytesRead;
-                while ((bytesRead = inputStream.read(temp)) != -1) {
-                    buffer.write(temp, 0, bytesRead);
-                }
+                // Read JSON length
+                int jsonLength = dis.readInt();
+                byte[] jsonBytes = new byte[jsonLength];
+                dis.readFully(jsonBytes);
 
-                byte[] receivedData = buffer.toByteArray();
-                String receivedString = new String(receivedData);
+                String jsonString = new String(jsonBytes, "UTF-8");
+                System.out.println("Received JSON: " + jsonString);
 
-                // Log to console
-                System.out.println("Received data: " + receivedString);
+                String blobName = "Unknown";
+                String datetime = "Unknown";
 
-                // Try to parse as JSON
                 try {
-                    JSONObject jsonObject = new JSONObject(receivedString);
-                    String blobName = jsonObject.optString("blob_name", "Unknown");
-                    String datetime = jsonObject.optString("datetime", "Unknown");
-
-                    // Notify the UI thread with parsed data
-                    notifyJsonDataReceived(blobName, datetime, receivedString);
-
+                    JSONObject jsonObject = new JSONObject(jsonString);
+                    blobName = jsonObject.optString("blob_name", "Unknown");
+                    datetime = jsonObject.optString("datetime", "Unknown");
                 } catch (JSONException e) {
                     notifyStatus("Invalid JSON received: " + e.getMessage());
-                    // Still notify with raw data as fallback
-                    notifyJsonDataReceived("Invalid JSON", "N/A", receivedString);
                 }
+
+                // Read remaining bytes as file data
+                ByteArrayOutputStream fileBuffer = new ByteArrayOutputStream();
+                byte[] temp = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = dis.read(temp)) != -1) {
+                    fileBuffer.write(temp, 0, bytesRead);
+                }
+
+                byte[] fileData = fileBuffer.toByteArray();
+                notifyBlobReceived(blobName, datetime, jsonString, fileData);
 
                 clientSocket.close();
                 notifyStatus("Client disconnected");
@@ -113,18 +113,16 @@ public class ByteServer {
         }
     }
 
-    private void notifyJsonDataReceived(String blobName, String datetime, String fullJson) {
+    private void notifyBlobReceived(String blobName, String datetime, String fullJson, byte[] fileData) {
         if (listener != null) {
-            // Use Handler to post to main UI thread
             new Handler(Looper.getMainLooper()).post(() ->
-                    listener.onJsonDataReceived(blobName, datetime, fullJson)
+                    listener.onBlobReceived(blobName, datetime, fullJson, fileData)
             );
         }
     }
 
     private void notifyStatus(String status) {
         if (listener != null) {
-            // Use Handler to post to main UI thread
             new Handler(Looper.getMainLooper()).post(() ->
                     listener.onServerStatus(status)
             );

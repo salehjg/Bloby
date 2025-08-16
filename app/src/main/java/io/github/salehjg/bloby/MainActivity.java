@@ -1,6 +1,7 @@
 package io.github.salehjg.bloby;
 
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.AdapterView;
@@ -10,10 +11,18 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import org.json.JSONObject;
+
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -27,6 +36,14 @@ import java.net.SocketException;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+
+import android.os.Environment;
+import android.Manifest;
+import android.content.pm.PackageManager;
+
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
 
 public class MainActivity extends AppCompatActivity {
 
@@ -43,6 +60,222 @@ public class MainActivity extends AppCompatActivity {
     private ByteServer byteServer;
     private DataAdapter dataAdapter;
 
+
+    // Add these constants to your MainActivity class
+    private static final int PERMISSIONS_REQUEST_CODE = 1000;
+    private static final String BLOBY_FOLDER = "Bloby";
+
+    private ActivityResultLauncher<Intent> mFileEditLauncher;
+
+
+    private void loadSavedBlobs() {
+        File filesDir = getFilesDir();
+        File[] blobDirs = filesDir.listFiles();
+
+        if (blobDirs == null) return;
+
+        for (File blobDir : blobDirs) {
+            if (blobDir.isDirectory()) {
+                File jsonFile = new File(blobDir, "blob.json");
+                if (jsonFile.exists()) {
+                    try {
+                        StringBuilder jsonContent = new StringBuilder();
+                        try (java.io.BufferedReader reader =
+                                     new java.io.BufferedReader(new java.io.FileReader(jsonFile))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                jsonContent.append(line);
+                            }
+                        }
+
+                        String fullJson = jsonContent.toString();
+                        JSONObject jsonObject = new JSONObject(fullJson);
+
+                        String blobName = jsonObject.optString("blob_name", blobDir.getName());
+                        String datetime = jsonObject.optString("datetime", "unknown");
+
+                        // Add to adapter
+                        dataAdapter.addJsonData(blobName, datetime, fullJson);
+
+                        addLogEntry("Restored blob: " + blobName);
+
+                    } catch (Exception e) {
+                        addLogEntry("Error loading blob from " + blobDir.getName() + ": " + e.getMessage());
+                    }
+                }
+            }
+        }
+    }
+
+    // Add this method to create external storage directory
+    private File getBlobyExternalDirectory() {
+        File externalDir = new File(Environment.getExternalStorageDirectory(), BLOBY_FOLDER);
+        if (!externalDir.exists()) {
+            externalDir.mkdirs();
+        }
+        return externalDir;
+    }
+
+    // Add permission checking method
+    private boolean checkStoragePermissions() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            return Environment.isExternalStorageManager();
+        } else {
+            int write = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            int read = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE);
+            return read == PackageManager.PERMISSION_GRANTED && write == PackageManager.PERMISSION_GRANTED;
+        }
+    }
+
+    // Add permission request method
+    private void requestStoragePermissions() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            try {
+                Intent intent = new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.addCategory("android.intent.category.DEFAULT");
+                intent.setData(android.net.Uri.parse(String.format("package:%s", getApplicationContext().getPackageName())));
+                startActivityForResult(intent, PERMISSIONS_REQUEST_CODE);
+            } catch (Exception e) {
+                Intent intent = new Intent();
+                intent.setAction(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                startActivityForResult(intent, PERMISSIONS_REQUEST_CODE);
+            }
+        } else {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE},
+                    PERMISSIONS_REQUEST_CODE);
+        }
+    }
+
+    /**
+     * Open file with appropriate application using content URI
+     */
+    private void openFileForEditing(String blobName) {
+        try {
+            // Get the blob directory from internal storage
+            File blobDir = new File(getFilesDir(), blobName);
+            if (!blobDir.exists()) {
+                Toast.makeText(this, "Blob directory not found", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Read the JSON to get the original file name
+            File jsonFile = new File(blobDir, "blob.json");
+            if (!jsonFile.exists()) {
+                Toast.makeText(this, "Blob JSON not found", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Parse JSON to get file name
+            StringBuilder jsonContent = new StringBuilder();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(jsonFile))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    jsonContent.append(line);
+                }
+            }
+
+            JSONObject jsonObject = new JSONObject(jsonContent.toString());
+            String fileName = jsonObject.optString("file_name", "unknown");
+
+            // Find the actual file in internal storage
+            File targetFile = new File(blobDir, fileName);
+            if (!targetFile.exists()) {
+                Toast.makeText(this, "File not found: " + fileName, Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Create intent with FileProvider URI - exactly like your working code
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setData(androidx.core.content.FileProvider.getUriForFile(
+                    getApplicationContext(),
+                    getPackageName() + ".provider",
+                    targetFile
+            ));
+            intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+
+            // Launch with result launcher
+            mFileEditLauncher.launch(intent);
+
+            addLogEntry("Opened file for editing: " + fileName);
+            Toast.makeText(this, "File opened. Changes will be saved automatically.", Toast.LENGTH_SHORT).show();
+
+        } catch (Exception e) {
+            Toast.makeText(this, "Error opening file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+            addLogEntry("Error opening file: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Determine MIME type based on file extension
+     */
+    private String getMimeType(String fileName) {
+        String extension = "";
+        int lastDot = fileName.lastIndexOf('.');
+        if (lastDot > 0) {
+            extension = fileName.substring(lastDot + 1).toLowerCase();
+        }
+
+        // Common MIME types
+        switch (extension) {
+            case "pdf":
+                return "application/pdf";
+            case "doc":
+                return "application/msword";
+            case "docx":
+                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "xls":
+                return "application/vnd.ms-excel";
+            case "xlsx":
+                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            case "ppt":
+                return "application/vnd.ms-powerpoint";
+            case "pptx":
+                return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            case "txt":
+                return "text/plain";
+            case "jpg":
+            case "jpeg":
+                return "image/jpeg";
+            case "png":
+                return "image/png";
+            case "gif":
+                return "image/gif";
+            case "bmp":
+                return "image/bmp";
+            case "webp":
+                return "image/webp";
+            case "mp4":
+                return "video/mp4";
+            case "avi":
+                return "video/x-msvideo";
+            case "mov":
+                return "video/quicktime";
+            case "mp3":
+                return "audio/mpeg";
+            case "wav":
+                return "audio/wav";
+            case "zip":
+                return "application/zip";
+            case "rar":
+                return "application/x-rar-compressed";
+            case "json":
+                return "application/json";
+            case "xml":
+                return "text/xml";
+            case "html":
+            case "htm":
+                return "text/html";
+            case "css":
+                return "text/css";
+            case "js":
+                return "application/javascript";
+            default:
+                return "application/octet-stream"; // Generic binary
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -57,56 +290,6 @@ public class MainActivity extends AppCompatActivity {
         buttonToggleLogs = findViewById(R.id.buttonToggleLogs);
         buttonAction4 = findViewById(R.id.buttonAction4);
 
-        // Initialize and display IP Address
-        String deviceIp = getDeviceIpAddress();
-        updateIpAddress(deviceIp);
-
-        // --- Setup RecyclerView (Main List) ---
-        dataAdapter = new DataAdapter();
-        mainRecyclerView.setLayoutManager(new LinearLayoutManager(this));
-        mainRecyclerView.setAdapter(dataAdapter);
-
-        // Set up item action listeners
-        dataAdapter.setOnItemActionListener(new DataAdapter.OnItemActionListener() {
-            @Override
-            public void onViewClicked(String fullJson, int position) {
-                // Show full JSON data in a dialog
-                showDataDialog("Full JSON Data", fullJson);
-                addLogEntry("Viewed JSON item at position " + position);
-            }
-
-            @Override
-            public void onSaveClicked(String fullJson, String blobName, int position) {
-                // Save JSON data to file using blob name
-                saveJsonToFile(fullJson, blobName, position);
-                addLogEntry("Saved JSON item: " + blobName);
-                Toast.makeText(MainActivity.this, "JSON saved as " + blobName + ".json", Toast.LENGTH_SHORT).show();
-            }
-
-            @Override
-            public void onDeleteClicked(int position) {
-                dataAdapter.removeItem(position);
-                addLogEntry("Deleted JSON item at position " + position);
-                Toast.makeText(MainActivity.this, "Item deleted", Toast.LENGTH_SHORT).show();
-            }
-        });
-
-        // Initialize ByteServer
-        byteServer = new ByteServer();
-        byteServer.setOnDataReceivedListener(new ByteServer.OnDataReceivedListener() {
-            @Override
-            public void onJsonDataReceived(String blobName, String datetime, String fullJson) {
-                // Add received JSON data to the main list
-                dataAdapter.addJsonData(blobName, datetime, fullJson);
-                addLogEntry("JSON received - Blob: " + blobName + ", DateTime: " + datetime);
-            }
-
-            @Override
-            public void onServerStatus(String status) {
-                addLogEntry("Server: " + status);
-            }
-        });
-
         // --- Setup Log ListView ---
         logData = new ArrayList<>();
         logAdapter = new ArrayAdapter<>(
@@ -120,6 +303,120 @@ public class MainActivity extends AppCompatActivity {
         addLogEntry("Application started");
         addLogEntry("UI components initialized");
         addLogEntry("Ready for connections");
+
+        // Initialize and display IP Address
+        String deviceIp = getDeviceIpAddress();
+        updateIpAddress(deviceIp);
+
+        // --- Setup RecyclerView (Main List) ---
+        dataAdapter = new DataAdapter();
+        mainRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+        mainRecyclerView.setAdapter(dataAdapter);
+        loadSavedBlobs();
+
+        mFileEditLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                new ActivityResultCallback<ActivityResult>() {
+                    @Override
+                    public void onActivityResult(ActivityResult result) {
+                        // File editing is complete
+                        addLogEntry("File editing completed");
+                        // The file changes are automatically saved by the external app
+                        // since we granted WRITE_URI_PERMISSION
+                    }
+                }
+        );
+
+        // Set up item action listeners
+        dataAdapter.setOnItemActionListener(new DataAdapter.OnItemActionListener() {
+            @Override
+            public void onViewClicked(String fullJson, int position) {
+                // Get the blob name from the JSON
+                String blobName = "unknown";
+                try {
+                    JSONObject jsonObject = new JSONObject(fullJson);
+                    blobName = jsonObject.optString("blob_name", "unknown");
+                } catch (Exception e) {
+                    addLogEntry("Error parsing JSON for blob name: " + e.getMessage());
+                }
+
+                final String finalBlobName = blobName;
+
+                // Show dialog with options
+                AlertDialog.Builder builder = new AlertDialog.Builder(MainActivity.this);
+                builder.setTitle("File Options")
+                        .setMessage("Choose what to do with this file:")
+                        .setPositiveButton("Edit File", (dialog, which) -> {
+                            openFileForEditing(finalBlobName);
+                        })
+                        .setNeutralButton("View JSON", (dialog, which) -> {
+                            showDataDialog("Full JSON Data", fullJson);
+                        })
+                        .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                        .show();
+
+                addLogEntry("File options shown for: " + finalBlobName);
+            }
+
+            @Override
+            public void onSaveClicked(String fullJson, String blobName, int position) {
+                // Keep existing save functionality
+                saveJsonToFile(fullJson, blobName, position);
+                addLogEntry("Saved JSON item: " + blobName);
+                Toast.makeText(MainActivity.this, "JSON saved as " + blobName + ".json", Toast.LENGTH_SHORT).show();
+            }
+
+            @Override
+            public void onDeleteClicked(int position) {
+                // Keep existing delete functionality
+                dataAdapter.removeItem(position);
+                addLogEntry("Deleted JSON item at position " + position);
+                Toast.makeText(MainActivity.this, "Item deleted", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+        // Initialize ByteServer
+        byteServer = new ByteServer();
+        byteServer.setOnDataReceivedListener(new ByteServer.OnDataReceivedListener() {
+            @Override
+            public void onBlobReceived(String blobName, String datetime, String fullJson, byte[] fileData) {
+                try {
+                    // Create a folder named after the blobName in internal storage
+                    File blobDir = new File(getFilesDir(), blobName);
+                    if (!blobDir.exists()) {
+                        blobDir.mkdirs();
+                    }
+
+                    // Save JSON as-is
+                    File jsonFile = new File(blobDir, "blob.json");
+                    try (FileOutputStream fos = new FileOutputStream(jsonFile)) {
+                        fos.write(fullJson.getBytes(StandardCharsets.UTF_8));
+                    }
+
+                    // Extract file_name from JSON
+                    JSONObject jsonObject = new JSONObject(fullJson);
+                    String fileName = jsonObject.optString("file_name", "default_blob_file");
+
+                    // Save byte array as file
+                    File blobFile = new File(blobDir, fileName);
+                    try (FileOutputStream fos = new FileOutputStream(blobFile)) {
+                        fos.write(fileData);
+                    }
+
+                    addLogEntry("Saved blob: " + blobName + ", path: " + blobFile.getAbsolutePath());
+                    dataAdapter.addJsonData(blobName, datetime, fullJson);
+
+                } catch (Exception e) {
+                    addLogEntry("Error saving blob: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+
+            @Override
+            public void onServerStatus(String status) {
+                addLogEntry("Server: " + status);
+            }
+        });
 
         // --- Set OnClick Listeners for Buttons ---
         buttonAction1.setOnClickListener(new View.OnClickListener() {
@@ -255,6 +552,7 @@ public class MainActivity extends AppCompatActivity {
 
     /**
      * Get the device's IP address
+     *
      * @return IP address as string, or "Not Available" if not found
      */
     private String getDeviceIpAddress() {
