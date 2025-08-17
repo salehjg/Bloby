@@ -460,31 +460,44 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onDeleteClicked(int position) {
-                try {
-                    DataAdapter.DataItem item = dataAdapter.getItem(position);
-                    if (item != null) {
-                        String blobName = item.getBlobName();
-
-                        // Delete the blob directory (json + file inside)
-                        File blobDir = new File(getFilesDir(), blobName);
-                        if (blobDir.exists()) {
-                            deleteRecursive(blobDir);
-                            addLogEntry("Deleted blob directory: " + blobName);
-                        } else {
-                            addLogEntry("Blob directory not found: " + blobName);
-                        }
-
-                        // Remove from adapter (UI list)
-                        dataAdapter.removeItem(position);
-                        Toast.makeText(MainActivity.this, "Blob deleted", Toast.LENGTH_SHORT).show();
-                    }
-                } catch (Exception e) {
-                    addLogEntry("Error deleting blob: " + e.getMessage());
-                    Toast.makeText(MainActivity.this, "Error deleting blob", Toast.LENGTH_SHORT).show();
-                    e.printStackTrace();
+                DataAdapter.DataItem item = dataAdapter.getItem(position);
+                if (item == null) {
+                    Toast.makeText(MainActivity.this, "Item not found", Toast.LENGTH_SHORT).show();
+                    return;
                 }
-            }
 
+                String blobName = item.getBlobName();
+
+                // Ask confirmation
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Confirm Delete")
+                        .setMessage("Are you sure you want to delete \"" + blobName + "\"?")
+                        .setPositiveButton("Delete", (dialog, which) -> {
+                            try {
+                                // Delete the blob directory (json + file inside)
+                                File blobDir = new File(getFilesDir(), blobName);
+                                if (blobDir.exists()) {
+                                    deleteRecursive(blobDir);
+                                    addLogEntry("Deleted blob directory: " + blobName);
+                                } else {
+                                    addLogEntry("Blob directory not found: " + blobName);
+                                }
+
+                                // Remove from adapter (UI list)
+                                dataAdapter.removeItem(position);
+                                Toast.makeText(MainActivity.this, "Blob deleted", Toast.LENGTH_SHORT).show();
+                            } catch (Exception e) {
+                                addLogEntry("Error deleting blob: " + e.getMessage());
+                                Toast.makeText(MainActivity.this, "Error deleting blob", Toast.LENGTH_SHORT).show();
+                                e.printStackTrace();
+                            }
+                        })
+                        .setNegativeButton("Cancel", (dialog, which) -> {
+                            // User cancelled deletion
+                            dialog.dismiss();
+                        })
+                        .show();
+            }
 
         });
 

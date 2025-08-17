@@ -96,7 +96,7 @@ def compute_sha256(file_bytes):
 def send_file(file_path, ip_address):
     uuid_str = str(uuid.uuid4())
     blob_name = f"{os.path.basename(file_path)}_{uuid_str}_{int(datetime.now().timestamp())}"
-    current_datetime = datetime.now().isoformat()
+    current_datetime = datetime.now().strftime("%Y-%m-%d--%H:%M:%S.%f")
 
     with open(file_path, 'rb') as file:
         file_bytes = file.read()
