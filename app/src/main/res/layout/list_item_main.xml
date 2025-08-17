@@ -62,12 +62,12 @@
                 android:minWidth="60dp" />
 
             <Button
-                android:id="@+id/buttonSave"
+                android:id="@+id/buttonSend"
                 style="?android:attr/buttonBarButtonStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="4dp"
-                android:text="Save"
+                android:text="Send"
                 android:textSize="12sp"
                 android:minWidth="60dp" />
 

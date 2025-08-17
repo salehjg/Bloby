@@ -17,7 +17,7 @@ public class DataAdapter extends RecyclerView.Adapter<DataAdapter.DataViewHolder
 
     public interface OnItemActionListener {
         void onViewClicked(String fullJson, int position);
-        void onSaveClicked(String fullJson, String blobName, int position);
+        void onSendClicked(String fullJson, String blobName, int position);
         void onDeleteClicked(int position);
     }
 
@@ -60,11 +60,11 @@ public class DataAdapter extends RecyclerView.Adapter<DataAdapter.DataViewHolder
             }
         });
 
-        holder.buttonSave.setOnClickListener(v -> {
+        holder.buttonSend.setOnClickListener(v -> {
             int currentPosition = holder.getAdapterPosition();
             if (currentPosition != RecyclerView.NO_POSITION && actionListener != null) {
                 DataItem currentItem = dataList.get(currentPosition);
-                actionListener.onSaveClicked(currentItem.getFullJson(), currentItem.getBlobName(), currentPosition);
+                actionListener.onSendClicked(currentItem.getFullJson(), currentItem.getBlobName(), currentPosition);
             }
         });
 
@@ -112,7 +112,7 @@ public class DataAdapter extends RecyclerView.Adapter<DataAdapter.DataViewHolder
         TextView textViewData;
         TextView textViewTimestamp;
         Button buttonView;
-        Button buttonSave;
+        Button buttonSend;
         Button buttonDelete;
 
         public DataViewHolder(@NonNull View itemView) {
@@ -120,7 +120,7 @@ public class DataAdapter extends RecyclerView.Adapter<DataAdapter.DataViewHolder
             textViewData = itemView.findViewById(R.id.textViewData);
             textViewTimestamp = itemView.findViewById(R.id.textViewTimestamp);
             buttonView = itemView.findViewById(R.id.buttonView);
-            buttonSave = itemView.findViewById(R.id.buttonSave);
+            buttonSend = itemView.findViewById(R.id.buttonSend);
             buttonDelete = itemView.findViewById(R.id.buttonDelete);
         }
     }

@@ -24,18 +24,13 @@ import org.json.JSONObject;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Enumeration;
 
 import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.net.Socket;
 import java.net.NetworkInterface;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
 
 import android.os.Environment;
 import android.Manifest;
@@ -50,7 +45,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView textViewIpAddress;
     private RecyclerView mainRecyclerView;
     private ListView logListView;
-    private Button buttonAction1, buttonAction2, buttonToggleLogs, buttonAction4;
+    private Button buttonWipeAll, buttonToggleLogs;
 
     private boolean isLogVisible = false;
     private ArrayList<String> logData;
@@ -276,6 +271,107 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void sendBlobToConnectedClient(String fullJson, String blobName) {
+        // Check if we have a connected client
+        if (!byteServer.hasConnectedClient()) {
+            Toast.makeText(this, "No Python client connected", Toast.LENGTH_SHORT).show();
+            addLogEntry("Send failed: No client connected");
+            return;
+        }
+
+        // Show confirmation dialog
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Send Blob")
+                .setMessage("Send '" + blobName + "' to connected Python client?")
+                .setPositiveButton("Send", (dialog, which) -> {
+                    sendBlobInBackground(fullJson, blobName);
+                })
+                .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                .show();
+    }
+
+    private void sendBlobInBackground(String fullJson, String blobName) {
+        new Thread(() -> {
+            try {
+                runOnUiThread(() -> {
+                    addLogEntry("Preparing to send blob: " + blobName);
+                });
+
+                // Read the file data from internal storage
+                File blobDir = new File(getFilesDir(), blobName);
+                if (!blobDir.exists()) {
+                    runOnUiThread(() -> {
+                        addLogEntry("Error: Blob directory not found: " + blobName);
+                        Toast.makeText(this, "Blob not found", Toast.LENGTH_SHORT).show();
+                    });
+                    return;
+                }
+
+                // Get the original file name from JSON
+                JSONObject jsonObject = new JSONObject(fullJson);
+                String fileName = jsonObject.optString("file_name", "unknown");
+
+                // Read the file data
+                File targetFile = new File(blobDir, fileName);
+                if (!targetFile.exists()) {
+                    runOnUiThread(() -> {
+                        addLogEntry("Error: File not found: " + fileName);
+                        Toast.makeText(this, "File not found: " + fileName, Toast.LENGTH_SHORT).show();
+                    });
+                    return;
+                }
+
+                byte[] fileData = readFileToBytes(targetFile);
+                if (fileData == null) {
+                    runOnUiThread(() -> {
+                        addLogEntry("Error: Could not read file data");
+                        Toast.makeText(this, "Could not read file data", Toast.LENGTH_SHORT).show();
+                    });
+                    return;
+                }
+
+                // Send data to connected client
+                byteServer.sendBlobToClient(fullJson, fileData);
+
+                runOnUiThread(() -> {
+                    addLogEntry("Successfully sent blob: " + blobName + " (" + fileData.length + " bytes)");
+                    Toast.makeText(this, "Blob sent successfully!", Toast.LENGTH_SHORT).show();
+                });
+
+                // Close server after sending blob
+                byteServer.stopServer();
+                runOnUiThread(() -> {
+                    addLogEntry("Server stopped after sending blob. Restarting...");
+                    byteServer.startServer(12345);
+                });
+
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    addLogEntry("Error sending blob: " + e.getMessage());
+                    Toast.makeText(this, "Error sending blob: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
+                e.printStackTrace();
+            }
+        }).start();
+    }
+
+    private byte[] readFileToBytes(File file) {
+        try (java.io.FileInputStream fis = new java.io.FileInputStream(file);
+             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                baos.write(buffer, 0, bytesRead);
+            }
+            return baos.toByteArray();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -285,10 +381,8 @@ public class MainActivity extends AppCompatActivity {
         textViewIpAddress = findViewById(R.id.textViewIpAddress);
         mainRecyclerView = findViewById(R.id.mainRecyclerView);
         logListView = findViewById(R.id.logListView);
-        buttonAction1 = findViewById(R.id.buttonAction1);
-        buttonAction2 = findViewById(R.id.buttonAction2);
+        buttonWipeAll = findViewById(R.id.buttonAction2);
         buttonToggleLogs = findViewById(R.id.buttonToggleLogs);
-        buttonAction4 = findViewById(R.id.buttonAction4);
 
         // --- Setup Log ListView ---
         logData = new ArrayList<>();
@@ -359,20 +453,39 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onSaveClicked(String fullJson, String blobName, int position) {
-                // Keep existing save functionality
-                saveJsonToFile(fullJson, blobName, position);
-                addLogEntry("Saved JSON item: " + blobName);
-                Toast.makeText(MainActivity.this, "JSON saved as " + blobName + ".json", Toast.LENGTH_SHORT).show();
+            public void onSendClicked(String fullJson, String blobName, int position) {
+                sendBlobToConnectedClient(fullJson, blobName);
             }
+
 
             @Override
             public void onDeleteClicked(int position) {
-                // Keep existing delete functionality
-                dataAdapter.removeItem(position);
-                addLogEntry("Deleted JSON item at position " + position);
-                Toast.makeText(MainActivity.this, "Item deleted", Toast.LENGTH_SHORT).show();
+                try {
+                    DataAdapter.DataItem item = dataAdapter.getItem(position);
+                    if (item != null) {
+                        String blobName = item.getBlobName();
+
+                        // Delete the blob directory (json + file inside)
+                        File blobDir = new File(getFilesDir(), blobName);
+                        if (blobDir.exists()) {
+                            deleteRecursive(blobDir);
+                            addLogEntry("Deleted blob directory: " + blobName);
+                        } else {
+                            addLogEntry("Blob directory not found: " + blobName);
+                        }
+
+                        // Remove from adapter (UI list)
+                        dataAdapter.removeItem(position);
+                        Toast.makeText(MainActivity.this, "Blob deleted", Toast.LENGTH_SHORT).show();
+                    }
+                } catch (Exception e) {
+                    addLogEntry("Error deleting blob: " + e.getMessage());
+                    Toast.makeText(MainActivity.this, "Error deleting blob", Toast.LENGTH_SHORT).show();
+                    e.printStackTrace();
+                }
             }
+
+
         });
 
         // Initialize ByteServer
@@ -380,79 +493,97 @@ public class MainActivity extends AppCompatActivity {
         byteServer.setOnDataReceivedListener(new ByteServer.OnDataReceivedListener() {
             @Override
             public void onBlobReceived(String blobName, String datetime, String fullJson, byte[] fileData) {
-                try {
-                    // Create a folder named after the blobName in internal storage
-                    File blobDir = new File(getFilesDir(), blobName);
-                    if (!blobDir.exists()) {
-                        blobDir.mkdirs();
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            addLogEntry("Processing received blob: " + blobName);
+
+                            // Create a folder named after the blobName in internal storage
+                            File blobDir = new File(getFilesDir(), blobName);
+                            if (!blobDir.exists()) {
+                                blobDir.mkdirs();
+                            }
+
+                            // Save JSON as-is
+                            File jsonFile = new File(blobDir, "blob.json");
+                            try (FileOutputStream fos = new FileOutputStream(jsonFile)) {
+                                fos.write(fullJson.getBytes(StandardCharsets.UTF_8));
+                            }
+
+                            // Extract file_name from JSON
+                            JSONObject jsonObject = new JSONObject(fullJson);
+                            String fileName = jsonObject.optString("file_name", "default_blob_file");
+
+                            // Save byte array as file
+                            File blobFile = new File(blobDir, fileName);
+                            try (FileOutputStream fos = new FileOutputStream(blobFile)) {
+                                fos.write(fileData);
+                            }
+
+                            addLogEntry("Saved blob: " + blobName + ", path: " + blobFile.getAbsolutePath());
+                            dataAdapter.addJsonData(blobName, datetime, fullJson); // Ensure this is also safe or wrapped
+                            Toast.makeText(MainActivity.this, "Received blob: " + blobName, Toast.LENGTH_SHORT).show();
+
+                            byteServer.stopServer();
+                            addLogEntry("Server stopped after receiving blob. Restarting...");
+                            byteServer.startServer(12345); // This starts a new server thread, which is fine
+
+                        } catch (Exception e) {
+                            addLogEntry("Error saving blob: " + e.getMessage());
+                            e.printStackTrace();
+                        }
                     }
-
-                    // Save JSON as-is
-                    File jsonFile = new File(blobDir, "blob.json");
-                    try (FileOutputStream fos = new FileOutputStream(jsonFile)) {
-                        fos.write(fullJson.getBytes(StandardCharsets.UTF_8));
-                    }
-
-                    // Extract file_name from JSON
-                    JSONObject jsonObject = new JSONObject(fullJson);
-                    String fileName = jsonObject.optString("file_name", "default_blob_file");
-
-                    // Save byte array as file
-                    File blobFile = new File(blobDir, fileName);
-                    try (FileOutputStream fos = new FileOutputStream(blobFile)) {
-                        fos.write(fileData);
-                    }
-
-                    addLogEntry("Saved blob: " + blobName + ", path: " + blobFile.getAbsolutePath());
-                    dataAdapter.addJsonData(blobName, datetime, fullJson);
-
-                } catch (Exception e) {
-                    addLogEntry("Error saving blob: " + e.getMessage());
-                    e.printStackTrace();
-                }
+                });
             }
 
             @Override
-            public void onServerStatus(String status) {
-                addLogEntry("Server: " + status);
+            public void onServerStatus(String status) { // This is MainActivity.java:509
+                // Switch to the main UI thread before updating the UI
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        addLogEntry("Server: " + status); // This will now run on the main thread
+                    }
+                });
             }
         });
 
-        // --- Set OnClick Listeners for Buttons ---
-        buttonAction1.setOnClickListener(new View.OnClickListener() {
+        buttonWipeAll.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if (!byteServer.isRunning()) {
-                    byteServer.startServer(12345);
-                    buttonAction1.setText("Stop Server");
-                } else {
-                    byteServer.stopServer();
-                    buttonAction1.setText("Start Server");
-                }
+                // Confirm with user
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("Wipe All Data")
+                        .setMessage("Are you sure you want to delete ALL saved blobs and files?")
+                        .setPositiveButton("Yes", (dialog, which) -> {
+                            try {
+                                // 1. Delete all folders and files in private storage
+                                File filesDir = getFilesDir();
+                                deleteRecursive(filesDir);
+
+                                // 2. Clear RecyclerView adapter (main list)
+                                dataAdapter.clearData();
+
+                                // 3. Log & toast
+                                addLogEntry("Wiped all stored blobs and cleared list.");
+                                Toast.makeText(MainActivity.this, "All data deleted.", Toast.LENGTH_SHORT).show();
+
+                            } catch (Exception e) {
+                                addLogEntry("Error wiping data: " + e.getMessage());
+                                Toast.makeText(MainActivity.this, "Error deleting data.", Toast.LENGTH_SHORT).show();
+                            }
+                        })
+                        .setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss())
+                        .show();
             }
         });
 
-        buttonAction2.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                dataAdapter.clearData();
-                addLogEntry("Action 2: Cleared received data");
-                Toast.makeText(MainActivity.this, "Data cleared.", Toast.LENGTH_SHORT).show();
-            }
-        });
 
         buttonToggleLogs.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 toggleLogVisibility();
-            }
-        });
-
-        buttonAction4.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                addLogEntry("Test log entry - Button 4 pressed");
-                Toast.makeText(MainActivity.this, "Test log added!", Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -464,7 +595,24 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(MainActivity.this, "Log: " + selectedLog, Toast.LENGTH_SHORT).show();
             }
         });
+
+        byteServer.startServer(12345);
     }
+
+    private void deleteRecursive(File fileOrDir) {
+        if (fileOrDir != null && fileOrDir.exists()) {
+            if (fileOrDir.isDirectory()) {
+                for (File child : fileOrDir.listFiles()) {
+                    deleteRecursive(child);
+                }
+            }
+            // Don’t delete root filesDir itself, only its contents
+            if (!fileOrDir.equals(getFilesDir())) {
+                fileOrDir.delete();
+            }
+        }
+    }
+
 
     /**
      * Toggle the visibility of the log ListView
@@ -522,32 +670,6 @@ public class MainActivity extends AppCompatActivity {
                     Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
                 })
                 .show();
-    }
-
-    /**
-     * Save JSON data to a file using blob name
-     */
-    private void saveJsonToFile(String jsonData, String blobName, int position) {
-        try {
-            // Use blob name for filename, fallback to position if blob name is invalid
-            String filename = blobName.replaceAll("[^a-zA-Z0-9._-]", "_");
-            if (filename.isEmpty()) {
-                filename = "json_data_" + position;
-            }
-
-            File file = new File(getExternalFilesDir(null), filename + ".json");
-            FileWriter writer = new FileWriter(file);
-
-            // Write metadata and JSON data
-            writer.write("// Saved on: " + new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
-                    java.util.Locale.getDefault()).format(new java.util.Date()) + "\n");
-            writer.write("// Position: " + position + "\n");
-            writer.write("// Blob Name: " + blobName + "\n\n");
-            writer.write(jsonData);
-            writer.close();
-        } catch (IOException e) {
-            Toast.makeText(this, "Error saving JSON file: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
     }
 
     /**

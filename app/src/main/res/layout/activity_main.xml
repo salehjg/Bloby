@@ -65,22 +65,13 @@
         app:layout_constraintEnd_toEndOf="parent">
 
         <Button
-            android:id="@+id/buttonAction1"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginEnd="4dp"
-            android:text="Start Server" />
-
-        <Button
             android:id="@+id/buttonAction2"
             style="?android:attr/buttonBarButtonStyle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
-            android:text="Clear Data" />
+            android:text="Wipe All" />
 
         <Button
             android:id="@+id/buttonToggleLogs"
@@ -90,14 +81,6 @@
             android:layout_weight="1"
             android:layout_marginEnd="4dp"
             android:text="Toggle Logs" />
-
-        <Button
-            android:id="@+id/buttonAction4"
-            style="?android:attr/buttonBarButtonStyle"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Test Log" />
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
